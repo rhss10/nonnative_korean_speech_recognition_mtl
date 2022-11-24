@@ -24,7 +24,7 @@ from transformers import (
     Wav2Vec2Model,
 )
 from datasets import load_from_disk
-DEVICE = 'cuda'
+DEVICE = 'cuda:1'
 
 def _prepare_cfg(raw_args=None):
     parser = argparse.ArgumentParser(
@@ -117,7 +117,7 @@ class DysarthriaDataset(torch.utils.data.Dataset):
         audio_len = len(audio)
 
         cls_label = {
-            0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5,
+            0: 0, 1: 1, 2: 2, 3: 3, 4: 4,
         }[row.category]
 
         ctc_label = self.tokenizer.encode(row.text)
@@ -326,7 +326,9 @@ def _eval(model, ds, tokenizer):
         ctc_labels.append(_ctc_decode(x["ctc_labels"].numpy()[0]))
 
         x = {k: v.to(model.device) for k, v in x.items()}
-        loss, cls_loss, ctc_loss, *_, cls_logits, ctc_logits = model(**x)
+        #NOTE: fp16
+        with torch.cuda.amp.autocast():
+            loss, cls_loss, ctc_loss, *_, cls_logits, ctc_logits = model(**x)
 
         cls_all.append(cls_logits.detach().numpy())
         pred_ids = np.argmax(ctc_logits.detach().numpy(), axis=-1)[0]
@@ -359,6 +361,7 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
     eval_target = None
     steps = 0
     start_epoch = 0
+    scaler = torch.cuda.amp.GradScaler()
 
     if cfg.train_from_ckpt:
         scheduler = torch.load(last_ckpt_path / "scheduler.pt")
@@ -376,9 +379,9 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
 
         for step, x in train_loop:
             x = {k: v.to(model.device) for k, v in x.items()}
-
-            loss, cls_loss, ctc_loss, *_ = model(**x)
-            loss.backward()
+            with torch.cuda.amp.autocast():
+                loss, cls_loss, ctc_loss, *_ = model(**x)
+            scaler.scale(loss).backward()
 
             _losses = {"loss": loss.item(), "ctc_loss": ctc_loss.item(), "cls_loss": cls_loss.item()}
             train_loop.set_description(
@@ -389,8 +392,9 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
             steps += 1
 
             # NOTE: gradient accumulation step == batch size in this code. ==> removed
-            optimizer.step()
+            scaler.step(optimizer)
             optimizer.zero_grad()
+            scaler.update()
 
         # Evaluation
         model.eval()
