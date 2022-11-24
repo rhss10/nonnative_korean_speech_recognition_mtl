@@ -161,11 +161,11 @@ def get_tokenizer(root_dir, df):
     vocab_dict["[UNK]"] = len(vocab_dict)
     vocab_dict["[PAD]"] = len(vocab_dict)
 
-    with open(root_dir + "vocab.json", "w") as f:
+    with open(root_dir / "vocab.json", "w") as f:
         json.dump(vocab_dict, f)
 
     return Wav2Vec2CTCTokenizer(
-        "vocab/aihub_nonnative_vocab.json",
+        root_dir / "vocab.json",
         unk_token="[UNK]",
         pad_token="[PAD]",
         word_delimiter_token=" ",
@@ -195,9 +195,9 @@ def _prepare_dataset(root_dir, df, train_from_ckpt, batch_size):
             train_df, test_df = train_test_split(df, test_size=0.2, random_state=101, stratify=df["category"])
             train_df, valid_df = train_test_split(train_df, test_size=0.25, random_state=101, stratify=train_df["category"])
 
-        train_df.to_csv(root_dir + "train.csv", index=False)
-        valid_df.to_csv(root_dir + "valid.csv", index=False)
-        test_df.to_csv(root_dir + "test.csv", index=False)
+        train_df.to_csv(root_dir / "train.csv", index=False)
+        valid_df.to_csv(root_dir / "valid.csv", index=False)
+        test_df.to_csv(root_dir / "test.csv", index=False)
 
     tokenizer = get_tokenizer(root_dir, df)
     train_ds = _get_dataset(tokenizer, train_df, batch_size, shuffle=True)
