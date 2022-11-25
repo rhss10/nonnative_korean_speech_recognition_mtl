@@ -117,7 +117,7 @@ class DysarthriaDataset(torch.utils.data.Dataset):
         audio_len = len(audio)
 
         cls_label = {
-            0: 0, 1: 1, 2: 2, 3: 3, 4: 4,
+				0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5,
         }[row.category]
 
         ctc_label = self.tokenizer.encode(row.text)
