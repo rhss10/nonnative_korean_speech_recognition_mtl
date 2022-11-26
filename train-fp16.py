@@ -7,7 +7,7 @@ import pickle
 
 from sklearn import metrics
 import numpy as np
-import tqdm
+from tqdm import tqdm
 import pandas as pd
 import transformers
 import torch
@@ -15,14 +15,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import torchaudio
-from jiwer import wer
-from scipy.special import softmax
 from sklearn.model_selection import train_test_split
 from transformers import (
     Wav2Vec2ForCTC,
     Wav2Vec2CTCTokenizer,
     Wav2Vec2Model,
 )
+import evaluate
+from evaluate import evaluator
 from datasets import load_from_disk
 DEVICE = 'cuda:1'
 
@@ -110,14 +110,12 @@ class DysarthriaDataset(torch.utils.data.Dataset):
         row = self.df.iloc[index]
 
         audio, fs = torchaudio.load(row.path)
-        audio = torchaudio.functional.resample(
-            waveform=audio, orig_freq=fs, new_freq=16_000,
-        )[0]
+        audio = torchaudio.functional.resample(waveform=audio, orig_freq=fs, new_freq=16_000, )[0]
 
         audio_len = len(audio)
 
         cls_label = {
-            0: 0, 1: 1, 2: 2, 3: 3, 4: 4,
+            0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5,
         }[row.category]
 
         ctc_label = self.tokenizer.encode(row.text)
@@ -160,6 +158,9 @@ def get_tokenizer(root_dir, df):
     vocab_dict = {v: i for i, v in enumerate(vocabs)}
     vocab_dict["[UNK]"] = len(vocab_dict)
     vocab_dict["[PAD]"] = len(vocab_dict)
+    assert vocab_dict.get('+', None) == None
+    assert vocab_dict.get('/', None) == None
+
 
     with open(root_dir / "vocab.json", "w") as f:
         json.dump(vocab_dict, f)
@@ -307,54 +308,50 @@ def _prepare_model_optimizer(args_cfg, tokenizer):
 def _eval(model, ds, tokenizer):
     def _ctc_decode(token_ids):
         # Output string with space in-between.
-        return tokenizer.decode(
-            token_ids=token_ids,
+        return tokenizer.batch_decode(
+            token_ids,
             skip_special_tokens=True,
             spaces_between_special_tokens=True,
         )
 
-    loop = tqdm.tqdm(enumerate(ds))
-
-    cls_all, ctc_all = [], []
-    cls_labels, ctc_labels = [], []
     losses, cls_losses, ctc_losses = [], [], []
 
-    for step, x in loop:
-        assert len(x["cls_labels"]) == 1
-
-        cls_labels.append(x["cls_labels"].item())
-        ctc_labels.append(_ctc_decode(x["ctc_labels"].numpy()[0]))
-
+    model.eval()
+    for step, x in tqdm(enumerate(ds)):
         x = {k: v.to(model.device) for k, v in x.items()}
         #NOTE: fp16
-        with torch.cuda.amp.autocast():
-            loss, cls_loss, ctc_loss, *_, cls_logits, ctc_logits = model(**x)
-
-        cls_all.append(cls_logits.detach().numpy())
-        pred_ids = np.argmax(ctc_logits.detach().numpy(), axis=-1)[0]
-        ctc_all.append(_ctc_decode(pred_ids))
+        with torch.no_grad():
+            with torch.cuda.amp.autocast():
+                loss, cls_loss, ctc_loss, *_, cls_logits, ctc_logits = model(**x)
 
         losses.append(loss.item())
         cls_losses.append(cls_loss.item())
         ctc_losses.append(ctc_loss.item())
 
-    cls_all = np.concatenate(cls_all)
-    prob_all = softmax(cls_all, axis=1)
+        cls_preds = torch.argmax(cls_logits, dim=-1)
+        ctc_preds = _ctc_decode(torch.argmax(ctc_logits, dim=-1))
+        ctc_labels = [s.replace(' [UNK]', '') for s in _ctc_decode(x["ctc_labels"])]
+        wer_metric.add_batch(predictions=ctc_preds, references=ctc_labels)
+        cer_metric.add_batch(predictions=ctc_preds, references=ctc_labels)
+        f1_metric.add_batch(predictions=cls_preds, references=x["cls_labels"])
+        prec_metric.add_batch(predictions=cls_preds, references=x["cls_labels"])
+        recall_metric.add_batch(predictions=cls_preds, references=x["cls_labels"])
+        acc_metric.add_batch(predictions=cls_preds, references=x["cls_labels"])
 
-    return {
+    acc_res = acc_metric.compute()
+    f1_res = f1_metric.compute(average='macro')
+    prec_res = prec_metric.compute(average='macro')
+    recall_res = recall_metric.compute(average='macro')
+    loss_results = {
         "average_loss": np.array(losses).mean(),
         "average_cls_loss": np.array(cls_losses).mean(),
-        "average_ctc_loss": np.array(ctc_losses).mean(),
-        "accuracy": metrics.accuracy_score(
-            y_true=cls_labels, y_pred=prob_all.argmax(1)),
-        "precision": metrics.precision_score(
-            y_true=cls_labels, y_pred=prob_all.argmax(1), average="macro"),
-        "recall": metrics.recall_score(
-            y_true=cls_labels, y_pred=prob_all.argmax(1), average="macro"),
-        "f1": metrics.f1_score(
-            y_true=cls_labels, y_pred=prob_all.argmax(1), average="macro"),
-        "per": wer(truth=ctc_labels, hypothesis=ctc_all),
+        "average_ctc_loss": np.array(ctc_losses).mean()
     }
+    acc_res.update(**{'wer': wer_metric.compute()}, **{'cer': cer_metric.compute()}, **f1_res, **prec_res, **recall_res)
+    acc_res.update(loss_results)
+
+    return acc_res
+
 
 #NOTE: removed gradient accumulation
 def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path, last_ckpt_path, all_ckpt_path, logger):
@@ -371,22 +368,19 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
         start_epoch = scheduler["last_epoch"]
         steps = start_epoch * len(train_ds)
 
+    progress_bar = tqdm(range((cfg.num_epochs - start_epoch) * len(train_ds)))
     for epoch in range(start_epoch, cfg.num_epochs):
         # Train
         model.enable_cls = epoch >= cfg.enable_cls_epochs
         model.train()
-        train_loop = tqdm.tqdm(enumerate(train_ds))
-
-        for step, x in train_loop:
+        for step, x in enumerate(train_ds):
             x = {k: v.to(model.device) for k, v in x.items()}
             with torch.cuda.amp.autocast():
                 loss, cls_loss, ctc_loss, *_ = model(**x)
             scaler.scale(loss).backward()
 
             _losses = {"loss": loss.item(), "ctc_loss": ctc_loss.item(), "cls_loss": cls_loss.item()}
-            train_loop.set_description(
-                " | ".join([f"Epoch [{epoch}] "] + [f"{k} {v:.4f}" for k, v in _losses.items()])
-            )
+            progress_bar.set_description_str(" | ".join([f"Epoch [{epoch}] "] + [f"{k} {v:.4f}" for k, v in _losses.items()]))
             for k, v in _losses.items():
                 logger(f"train/{k}", v, steps)
             steps += 1
@@ -395,9 +389,9 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
             scaler.step(optimizer)
             optimizer.zero_grad()
             scaler.update()
+            progress_bar.update(1)
 
         # Evaluation
-        model.eval()
         eval_results = _eval(model, valid_ds, tokenizer)
         for k, v in eval_results.items():
             logger(f"eval/{k}", v, epoch)
@@ -435,6 +429,7 @@ def _get_logger(tb_path):
         writer.add_scalar(name, value, step)
     return _log
 
+
 ##NOTE: made for huggingface dataset module
 def collate_fn(batch):
     return {
@@ -468,17 +463,19 @@ if __name__ == "__main__":
     logger = _get_logger(cfg.root_dir)
 
     tokenizer, train_ds, valid_ds, test_ds = _prepare_dataset(cfg.root_dir, pd.read_csv(cfg.csv_path), cfg.train_from_ckpt, cfg.batch_size)
-
-    #tokenizer = Wav2Vec2CTCTokenizer("vocab/aihub_nonnative_vocab.json", unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token=" ")
-    #train_ds = load_from_disk('/data2/rhss10/speech_corpus/huggingface_dataset/AIHUB_NONNATIVE/train_50h_5ds')
-    #valid_ds = load_from_disk('/data2/rhss10/speech_corpus/huggingface_dataset/AIHUB_NONNATIVE/valid_5ds')
-    #test_ds = load_from_disk('/data2/rhss10/speech_corpus/huggingface_dataset/AIHUB_NONNATIVE/test_others-ds')
-    #train_dataloader = torch.utils.data.DataLoader(train_ds, shuffle=True, batch_size=1, collate_fn=collate_fn)
-    #valid_dataloader = torch.utils.data.DataLoader(valid_ds, batch_size=1, collate_fn=collate_fn)
-    #test_dataloader = torch.utils.data.DataLoader(test_ds, batch_size=1, collate_fn=collate_fn)
-
-
     model, optimizer = _prepare_model_optimizer(cfg, tokenizer)
+
+    print("***** Running training *****")
+    print(f"  Num examples = {len(train_ds)}")
+    print(f"  Num Epochs = {cfg.num_epochs}")
+    print(f"  Batch size = {cfg.batch_size}")
+
+    acc_metric = evaluate.load('accuracy')
+    f1_metric = evaluate.load('f1')
+    prec_metric = evaluate.load('precision')
+    recall_metric = evaluate.load('recall')
+    wer_metric = evaluate.load('wer') 
+    cer_metric = evaluate.load('cer')
 
     # Train & Validation loop
     _train(
@@ -492,5 +489,6 @@ if __name__ == "__main__":
     for k, v in test_results.items():
         logger(f"test/{k}", v, 0)
     json.dump(test_results, open(cfg.root_dir / "test_metric_results.json", "w"))
+    print('- Training finished')
 
 
