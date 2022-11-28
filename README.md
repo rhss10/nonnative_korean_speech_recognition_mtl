@@ -14,6 +14,6 @@
     - (3) .... ==> 시간 남을 경우
 
 ## 코드
-0. 통일한 파라미터: --num_epochs 50 **--num_classes 6** --csv_path dataset.csv **--batch_size 16**
+0. 통일한 파라미터: --num_epochs 30 **--num_classes 6** --csv_path dataset.csv **--batch_size 8**
 1. STL: -ctc_weight 1.0 --cls_weight 0.0
 2. MTL: --cls_weight 0.5 --ctc_weight 1.0 --enable_cls_epochs 0 ==> **좋은 결과 나올때까지 계속 조정**
