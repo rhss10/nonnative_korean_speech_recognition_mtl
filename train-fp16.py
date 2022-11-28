@@ -24,7 +24,7 @@ from transformers import (
 import evaluate
 from evaluate import evaluator
 from datasets import load_from_disk
-DEVICE = 'cuda:1'
+DEVICE = 'cuda:0'
 
 def _prepare_cfg(raw_args=None):
     parser = argparse.ArgumentParser(
@@ -417,10 +417,10 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
         if cfg.save_all_epochs:
             model.save_pretrained(all_ckpt_path / f"e-{epoch:04d}")
 
-    # Save last model
-    model.save_pretrained(last_ckpt_path)
-    torch.save(optimizer.state_dict(), last_ckpt_path / "optimizer.pt")
-    torch.save({"last_epoch": cfg.num_epochs}, last_ckpt_path / "scheduler.pt")
+        # Save last model
+        model.save_pretrained(last_ckpt_path)
+        torch.save(optimizer.state_dict(), last_ckpt_path / "optimizer.pt")
+        torch.save({"last_epoch": cfg.num_epochs}, last_ckpt_path / "scheduler.pt")
 
 
 def _get_logger(tb_path):
