@@ -182,9 +182,9 @@ def _get_dataset(tokenizer, target_df, batch_size, **kwargs):
 
 def _prepare_dataset(root_dir, df, train_from_ckpt, batch_size):
     if train_from_ckpt:
-        train_df = pd.read_csv(root_dir + "train.csv")
-        valid_df = pd.read_csv(root_dir + "valid.csv")
-        test_df = pd.read_csv(root_dir + "test.csv")
+        train_df = pd.read_csv(root_dir + "train..csv")
+        valid_df = pd.read_csv(root_dir + "valid..csv")
+        test_df = pd.read_csv(root_dir + "test..csv")
     else:
         if "split" in df:
             # Predefined split
