@@ -153,9 +153,8 @@ def _collator(batch):
 
 ##NOTE: uses predefined vocab
 def get_tokenizer(root_dir, df):
-    vocabs = sorted(list(set(itertools.chain.from_iterable(
-        df.text.apply(lambda x: x.split())))))
-    vocab_dict = {v: i for i, v in enumerate(vocabs)}
+    vocabs = list(set(' '.join(df.text)))
+    vocab_dict = {v: i for i, v in enumerate(sorted(vocabs))}
     vocab_dict["[UNK]"] = len(vocab_dict)
     vocab_dict["[PAD]"] = len(vocab_dict)
     assert vocab_dict.get('+', None) == None
@@ -163,7 +162,7 @@ def get_tokenizer(root_dir, df):
 
 
     with open(root_dir / "vocab.json", "w") as f:
-        json.dump(vocab_dict, f)
+        json.dump(vocab_dict, f, ensure_ascii=False)
 
     return Wav2Vec2CTCTokenizer(
         root_dir / "vocab.json",
