@@ -84,7 +84,7 @@ def _prepare_cfg(raw_args=None):
     )
 
     args = parser.parse_args(raw_args)  # Default to sys.argv
-    args.exp_name = f"{args.prefix}_cls={args.num_classes}_e={args.num_epochs}_bs={args.batch_size}_ctcW={args.ctc_weight}"
+    args.exp_name = f"{args.prefix}_cls={args.num_classes}_e={args.num_epochs}_bs={args.batch_size}_ctcW={args.ctc_weight}_clsW={args.cls_weight}"
 
     if args.root_dir is None:
         # Train from scratch
