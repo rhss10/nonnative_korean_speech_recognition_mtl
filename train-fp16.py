@@ -125,6 +125,7 @@ class DysarthriaDataset(torch.utils.data.Dataset):
             "audio_len": audio_len,
             "cls_label": cls_label,
             "ctc_label": ctc_label,
+            "text": row.text
         }
 
     def __len__(self):
@@ -149,11 +150,12 @@ def _collator(batch):
             batch_first=True,
             padding_value=-100,
         ),
+        'text': [x["text"] for x in batch]
     }
 
 ##NOTE: uses predefined vocab
 def get_tokenizer(root_dir, df):
-    vocabs = list(set(' '.join(df.text)))
+    vocabs = list(set(''.join(df.text)))
     vocab_dict = {v: i for i, v in enumerate(sorted(vocabs))}
     vocab_dict["[UNK]"] = len(vocab_dict)
     vocab_dict["[PAD]"] = len(vocab_dict)
@@ -305,19 +307,12 @@ def _prepare_model_optimizer(args_cfg, tokenizer):
 
 
 def _eval(model, ds, tokenizer):
-    def _ctc_decode(token_ids):
-        # Output string with space in-between.
-        return tokenizer.batch_decode(
-            token_ids,
-            skip_special_tokens=True,
-            spaces_between_special_tokens=True,
-        )
 
     losses, cls_losses, ctc_losses = [], [], []
-
     model.eval()
     for step, x in tqdm(enumerate(ds)):
-        x = {k: v.to(model.device) for k, v in x.items()}
+        ctc_labels = x['text']
+        x = {k: v.to(model.device) for k, v in x.items() if k != 'text'}
         #NOTE: fp16
         with torch.no_grad():
             with torch.cuda.amp.autocast():
@@ -328,8 +323,8 @@ def _eval(model, ds, tokenizer):
         ctc_losses.append(ctc_loss.item())
 
         cls_preds = torch.argmax(cls_logits, dim=-1)
-        ctc_preds = _ctc_decode(torch.argmax(ctc_logits, dim=-1))
-        ctc_labels = [s.replace(' [UNK]', '') for s in _ctc_decode(x["ctc_labels"])]
+        ctc_preds = tokenizer.batch_decode(torch.argmax(ctc_logits, dim=-1))
+
         wer_metric.add_batch(predictions=ctc_preds, references=ctc_labels)
         cer_metric.add_batch(predictions=ctc_preds, references=ctc_labels)
         f1_metric.add_batch(predictions=cls_preds, references=x["cls_labels"])
@@ -373,7 +368,7 @@ def _train(cfg, model, train_ds, valid_ds, tokenizer, optimizer, best_ckpt_path,
         model.enable_cls = epoch >= cfg.enable_cls_epochs
         model.train()
         for step, x in enumerate(train_ds):
-            x = {k: v.to(model.device) for k, v in x.items()}
+            x = {k: v.to(model.device) for k, v in x.items() if k != 'text'}
             with torch.cuda.amp.autocast():
                 loss, cls_loss, ctc_loss, *_ = model(**x)
             scaler.scale(loss).backward()
