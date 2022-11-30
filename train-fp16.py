@@ -24,7 +24,7 @@ from transformers import (
 import evaluate
 from evaluate import evaluator
 from datasets import load_from_disk
-DEVICE = 'cuda:0'
+DEVICE = 'cuda:1'
 
 def _prepare_cfg(raw_args=None):
     parser = argparse.ArgumentParser(
