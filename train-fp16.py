@@ -24,7 +24,7 @@ from transformers import (
 import evaluate
 from evaluate import evaluator
 from datasets import load_from_disk
-DEVICE = 'cuda:1'
+DEVICE = 'cuda:0'
 
 def _prepare_cfg(raw_args=None):
     parser = argparse.ArgumentParser(
@@ -281,8 +281,7 @@ class Wav2Vec2MTL(Wav2Vec2ForCTC):
 def _prepare_model_optimizer(args_cfg, tokenizer):
     if args_cfg.pretrained_weights is not None:
         model = Wav2Vec2MTL.from_pretrained(args_cfg.pretrained_weights)
-        optimizer = torch.optim.Adam(
-            model.parameters(), lr=args_cfg.learning_rate, betas=(0.9, 0.98), eps=1e-08)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args_cfg.learning_rate, betas=(0.9, 0.98), eps=1e-08)
     else:
         cfg, *_ = transformers.PretrainedConfig.get_config_dict("facebook/wav2vec2-xls-r-300m")
         cfg["gradient_checkpointing"] = True
