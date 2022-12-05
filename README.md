@@ -12,7 +12,7 @@
 |Model|Train|Dev|Test|
 |----|-----|------|------|
 | MTL | Ksponspeech/Train L1 125시간(각 17초 이하) + AIHUB-NONNATIVE/Train L2 125시간(각 17초 이하) | AIHUB-NONNATIVE/Validation L2 (각 17초 이하) 50% | AIHUB-NONNATIVE/Validation L2 (각 17초 이하) 50% |
-| MTL | AIHUB-NONNATIVE/Train L2 250시간(각 17초 이하) | AIHUB-NONNATIVE/Validation L2 전부(각 17초 이하) 50% | AIHUB-NONNATIVE/Validation L2 전부(각 17초 이하) 50% |
+| MTL | AIHUB-NONNATIVE/Train L2 250시간(각 17초 이하) | AIHUB-NONNATIVE/Validation L2 (각 17초 이하) 50% | AIHUB-NONNATIVE/Validation L2 (각 17초 이하) 50% |
 
 3. ABLATION STUDY
 
