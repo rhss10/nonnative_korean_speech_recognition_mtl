@@ -101,23 +101,19 @@ def _prepare_cfg(raw_args=None):
     return args
 
 
-class DysarthriaDataset(torch.utils.data.Dataset):
+class NonnativeDataset(torch.utils.data.Dataset):
     def __init__(self, df, tokenizer):
         self.df = df
         self.tokenizer = tokenizer
 
     def __getitem__(self, index):
         row = self.df.iloc[index]
-
         audio, fs = torchaudio.load(row.path)
         audio = torchaudio.functional.resample(waveform=audio, orig_freq=fs, new_freq=16_000, )[0]
-
         audio_len = len(audio)
-
         cls_label = {
             0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5,
         }[row.category]
-
         ctc_label = self.tokenizer.encode(row.text)
         
         return {
@@ -153,7 +149,7 @@ def _collator(batch):
         'text': [x["text"] for x in batch]
     }
 
-##NOTE: uses predefined vocab
+
 def get_tokenizer(root_dir, df):
     vocabs = list(set(''.join(df.text)))
     vocab_dict = {v: i for i, v in enumerate(sorted(vocabs))}
@@ -161,7 +157,6 @@ def get_tokenizer(root_dir, df):
     vocab_dict["[PAD]"] = len(vocab_dict)
     assert vocab_dict.get('+', None) == None
     assert vocab_dict.get('/', None) == None
-
 
     with open(root_dir / "vocab.json", "w") as f:
         json.dump(vocab_dict, f, ensure_ascii=False)
@@ -176,7 +171,7 @@ def get_tokenizer(root_dir, df):
 
 def _get_dataset(tokenizer, target_df, batch_size, **kwargs):
     return torch.utils.data.DataLoader(
-        DysarthriaDataset(target_df, tokenizer),
+        NonnativeDataset(target_df, tokenizer),
         batch_size=batch_size, collate_fn=_collator, pin_memory=True, **kwargs,
     )
 
@@ -306,7 +301,6 @@ def _prepare_model_optimizer(args_cfg, tokenizer):
 
 
 def _eval(model, ds, tokenizer):
-
     losses, cls_losses, ctc_losses = [], [], []
     model.eval()
     for step, x in tqdm(enumerate(ds)):
@@ -421,28 +415,6 @@ def _get_logger(tb_path):
     def _log(name, value, step=0):
         writer.add_scalar(name, value, step)
     return _log
-
-
-##NOTE: made for huggingface dataset module
-def collate_fn(batch):
-    return {
-            "input_values": torch.nn.utils.rnn.pad_sequence(
-                [torch.tensor(x["audio"]["array"]) for x in batch],
-                batch_first=True,
-                padding_value=0.0,
-            ),
-            "input_lengths": torch.LongTensor(
-                [x["audio_len"] for x in batch]
-            ),
-            "cls_labels": torch.LongTensor(
-                [x["cls_label"] for x in batch]
-            ),
-            "ctc_labels": torch.nn.utils.rnn.pad_sequence(
-                [torch.IntTensor(x["ctc_labels"]) for x in batch],
-                batch_first=True,
-                padding_value=-100,
-            ),
-        }
 
 
 if __name__ == "__main__":
